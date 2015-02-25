@@ -1,0 +1,106 @@
+#!/bin/sh
+#
+# rebouncer	Start rebouncer controller daemon
+#
+# chkconfig: - 64 36
+# description: rebouncer is a tool to control pgbouncer, switching
+#              it between different nodes in a cluster.
+
+## BEGIN INIT INFO
+# Provides: rebouncer
+# Required-Start: $local_fs $remote_fs $network $syslog $named
+# Required-Stop: $local_fs $remote_fs $network $syslog $named
+# Should-Start: postgresql pgbouncer
+# Short-Description: Start rebouncer controller
+# Description: rebouncer is a tool to control pgbouncer, switching
+#              it between different nodes in a cluster.
+### END INIT INFO
+
+# Source function library.
+. /etc/rc.d/init.d/functions
+
+exec=/usr/bin/rebouncer
+prog=rebouncer
+pidfile=/var/run/rebouncer/rebouncer.pid
+lockfile=/var/lock/subsys/$prog
+
+REBOUNCERCONFIG=/etc/rebouncer/rebouncer.ini
+REBOUNCERLOG=/var/log/rebouncer.log
+REBOUNCERLISTEN=localhost:7100
+
+# Get config.
+. /etc/sysconfig/network
+
+# Override defaults from /etc/sysconfig/rebouncer if file is present
+[ -e /etc/sysconfig/$prog ] && . /etc/sysconfig/$prog
+
+# Check that networking is up.
+[ "${NETWORKING}" = "no" ] && exit 6
+
+start(){
+	[ -x $exec ] || exit 5
+	echo -n "Starting $prog: "
+
+	# Make sure startup-time log file is valid
+	if [ ! -e "$REBOUNCERLOG" -a ! -h "$REBOUNCERLOG" ]
+	then
+		touch "$REBOUNCERLOG" || exit 1
+		chown pgbouncer:pgbouncer "$REBOUNCERLOG"
+		chmod go-rwx "$REBOUNCERLOG"
+		[ -x /usr/bin/chcon ] && /usr/bin/chcon -u system_u -r object_r -t postgresql_log_t "$REBOUNCERLOG" 2>/dev/null
+	fi
+
+        mkdir -p $(dirname $pidfile)
+	chown pgbouncer:pgbouncer $(dirname $pidfile)
+
+	daemon --user=pgbouncer --pidfile=$pidfile "$exec -config=$REBOUNCERCONFIG -logfile=$REBOUNCERLOG -http=$REBOUNCERLISTEN -pidfile=$pidfile &"
+	retval=$?
+        echo
+	[ $retval -eq 0 ] && touch $lockfile
+	return $retval
+}
+
+stop(){
+	echo -n "Stopping $prog: "
+	killproc -p $pidfile $prog -TERM
+	retval=$?
+	echo
+	[ $retval -eq 0 ] && rm -f $lockfile
+	return $retval
+}
+
+restart(){
+	stop
+	start
+}
+
+rh_status() {
+	status -p $pidfile $prog
+}
+
+rh_status_q() {
+	rh_status >/dev/null 2>&1
+}
+
+
+case "$1" in
+  start)
+	rh_status_q && exit 0
+	start
+	;;
+  stop)
+	rh_status_q || exit 0
+	stop
+	;;
+  restart)
+	restart
+	;;
+  status)
+	rh_status
+	;;
+  *)
+	echo $"Usage: $0 {start|stop|restart|status}"
+	exit 2
+esac
+
+exit $?

@@ -1,0 +1,9 @@
+[global]
+pgbouncer=host=/tmp port=1000 sslmode=disable dbname=pgbouncer
+symlink=pgbouncer.ini
+configdir=configs/
+interval=10
+
+[servers]
+srv1=host=/tmp port=5432 sslmode=disable dbname=postgres
+srv2=host=/tmp port=5494 sslmode=disable dbname=postgres
