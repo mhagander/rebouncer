@@ -44,7 +44,7 @@ var config Config
 // Check one server. Does not have timeout functionality, so the
 // calling function must take care of timeouts.
 func checkServer(server Server, retchan chan Status) {
-	db, err := sql.Open("postgres", server.connstr+" connect_timeout=2")
+	db, err := sql.Open("postgres", fmt.Sprintf("%s connect_timeout=%d", server.connstr, config.getInt("global", "timeout", 3)-1))
 	if err != nil {
 		retchan <- DOWN
 		return
@@ -76,7 +76,7 @@ func checkServer(server Server, retchan chan Status) {
 // Check one server, timing out after 3 seconds.
 // XXX: This timeout should probably be made configurable
 func checkServerWithTimeout(server *Server, donechannel chan int) {
-	timeout := time.After(3 * time.Second)
+	timeout := time.After(time.Duration(config.getInt("global", "timeout", 3)) * time.Second)
 	retchan := make(chan Status, 1)
 
 	// Send the actual check

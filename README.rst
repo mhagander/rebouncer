@@ -84,6 +84,10 @@ interval
   Number of seconds between polling servers. All servers are polled
   in parallel once this timer has expired. If not specified, 30 seconds
   is used as interval.
+timeout
+  Number of seconds to time out a connection. `rebouncer` will set the
+  network timeout to one second less than this, so it should never be
+  set to a value less than `2`.
 
 The `servers` section has one setting for each server that is a member
 of the cluster. The settings name is the name of the server as being
