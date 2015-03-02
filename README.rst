@@ -141,3 +141,8 @@ The output of the webservers `/nagios` URL gives an example URL for using
 with Nagios monitors. An example plugin is also included in the
 `/nagios` directory, which needs to be fed the base URL of the `rebouncer`
 webserver to work.
+
+License
+-------
+`rebouncer` is available using the PostgreSQL license, same as the database
+server itself.
