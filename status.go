@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	_ "net/http/pprof"
 	"runtime"
@@ -98,5 +99,6 @@ func runHttpServer() {
 	http.HandleFunc("/", httpRootHandler)
 	http.HandleFunc("/nodes", httpNodesHandler)
 	http.HandleFunc("/nagios", httpNagiosHandler)
+	log.Printf("Starting status http listener at http://%s", *listenAddr)
 	http.ListenAndServe(*listenAddr, nil)
 }
