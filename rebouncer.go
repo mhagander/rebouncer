@@ -73,8 +73,7 @@ func checkServer(server Server, retchan chan Status) {
 	}
 }
 
-// Check one server, timing out after 3 seconds.
-// XXX: This timeout should probably be made configurable
+// Check one server, timing out after 3 seconds or whatever is in the config.
 func checkServerWithTimeout(server *Server, donechannel chan int) {
 	timeout := time.After(time.Duration(config.getInt("global", "timeout", 3)) * time.Second)
 	retchan := make(chan Status, 1)
