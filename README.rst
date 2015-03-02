@@ -111,3 +111,29 @@ not be possible to connect to `pgbouncer`. For simplicity (in order to
 avoid having to parse the connection string), `rebouncer` leaves it up
 to the configuration file to specify this correctly.
 
+Status webserver
+----------------
+A small webserver runs that can be used to view the current status of
+the `rebouncer` instance. It serves a few endpoints:
+
+/
+  A generic status overview
+/nodes
+  A list of which nodes have which status, for parsing (the root URL
+  gives a more detailed status).
+/nagios
+  A nagios compatible output for attaching a monitor to
+/debug/pprof/
+  The `go` default debug view, which shows details about what different
+  goroutines are currently up to, including stack traces.
+
+This webserver is not protected in any way, so normally it needs to be
+protected either by binding only to a localhost interface, or by using
+kernel firewall rules.
+
+Nagios integration
+------------------
+The output of the webservers `/nagios` URL gives an example URL for using
+with Nagios monitors. An example plugin is also included in the
+`/nagios` directory, which needs to be fed the base URL of the `rebouncer`
+webserver to work.
