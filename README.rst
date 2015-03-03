@@ -120,14 +120,14 @@ Status webserver
 A small webserver runs that can be used to view the current status of
 the `rebouncer` instance. It serves a few endpoints:
 
-/
+\/
   A generic status overview
-/nodes
+\/nodes
   A list of which nodes have which status, for parsing (the root URL
   gives a more detailed status).
-/nagios
+\/nagios
   A nagios compatible output for attaching a monitor to
-/debug/pprof/
+\/debug\/pprof\/
   The `go` default debug view, which shows details about what different
   goroutines are currently up to, including stack traces.
 
