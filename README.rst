@@ -142,6 +142,25 @@ with Nagios monitors. An example plugin is also included in the
 `/nagios` directory, which needs to be fed the base URL of the `rebouncer`
 webserver to work.
 
+Building
+--------
+Building `rebouncer` requires a working installation of go version 1.2 or
+later. If you don't have it already, install it using the instructions
+at http://golang.org/doc/install.
+
+Once you've done that, you must also set your `GOPATH` variable, as per
+the go standard. Set it to for example `/home/user/gocode`.
+
+Once that is done, download and build::
+
+  # go get github.com/mhagander/rebouncer
+  # go build github.com/mhagander/rebouncer
+  # go install github.com/mhagander/rebouncer
+
+This will put the `rebouncer` executable in the `$GOPATH/bin` directory.
+As go build statically linked binaries, this is the only file that you
+need to run `rebouncer`.
+
 License
 -------
 `rebouncer` is available using the PostgreSQL license, same as the database
