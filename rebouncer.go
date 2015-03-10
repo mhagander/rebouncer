@@ -164,12 +164,18 @@ func mainloop(statuschan chan []Server) {
 		}
 		servers = append(servers, Server{name: name, connstr: connstr})
 	}
-	bouncer := getValidBouncerConnection()
-	if bouncer == nil {
-		// Error already logged
-		os.Exit(1)
+	for {
+		bouncer := getValidBouncerConnection()
+		if bouncer == nil {
+			// Error already logged
+			time.Sleep(5 * time.Second)
+		} else {
+			bouncer.Close()
+			break
+		}
 	}
-	bouncer.Close()
+
+	log.Printf("Connection to pgbouncer validated, starting polling")
 
 	// Send initial status
 	statuschan <- servers
