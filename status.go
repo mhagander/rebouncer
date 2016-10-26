@@ -95,10 +95,10 @@ func httpNagiosHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func runHttpServer() {
+func runHTTPServer() error {
 	http.HandleFunc("/", httpRootHandler)
 	http.HandleFunc("/nodes", httpNodesHandler)
 	http.HandleFunc("/nagios", httpNagiosHandler)
 	log.Printf("Starting status http listener at http://%s", *listenAddr)
-	http.ListenAndServe(*listenAddr, nil)
+	return http.ListenAndServe(*listenAddr, nil)
 }

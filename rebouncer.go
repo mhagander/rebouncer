@@ -4,12 +4,15 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
-	_ "github.com/lib/pq"
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
+
+	"github.com/go-logfmt/logfmt"
+	_ "github.com/lib/pq"
 )
 
 type Status int
@@ -31,129 +34,86 @@ const (
 	MASTER
 )
 
-type Server struct {
-	name      string
-	connstr   string
-	status    Status
-	lastcheck time.Time
-	laststate time.Time
+var (
+	config           Config
+	aggressiveChecks bool //When true, do status checks every 100ms instead of configured interval
+)
+
+func AttemptClose(db *sql.DB) {
+	if db == nil {
+		return
+	}
+
+	err := db.Close()
+	if err != nil {
+		log.Println(err)
+	}
 }
 
-var config Config
+func decodeConnStrTokens(connStr string) (map[string]string, error) {
+	decoder := logfmt.NewDecoder(strings.NewReader(connStr))
+	tokens := make(map[string]string)
 
-// Check one server. Does not have timeout functionality, so the
-// calling function must take care of timeouts.
-func checkServer(server Server, retchan chan Status) {
-	db, err := sql.Open("postgres", fmt.Sprintf("%s connect_timeout=%d", server.connstr, config.getInt("global", "timeout", 3)-1))
+	decoder.ScanRecord()
+	err := decoder.Err()
 	if err != nil {
-		retchan <- DOWN
-		return
-	}
-	defer db.Close()
-	db.SetMaxIdleConns(0)
-
-	err = db.Ping()
-	if err != nil {
-		retchan <- DOWN
-		return
+		return tokens, err
 	}
 
-	var inrecovery bool
-	err = db.QueryRow("SELECT pg_is_in_recovery()").Scan(&inrecovery)
-	if err != nil {
-		log.Printf("%s: query error: %s", server.name, err)
-		retchan <- DOWN
-		return
+	for decoder.ScanKeyval() {
+		err = decoder.Err()
+		if err != nil {
+			return tokens, err
+		}
+
+		key := string(decoder.Key())
+		value := string(decoder.Value())
+
+		tokens[key] = value
 	}
 
-	if inrecovery {
-		retchan <- STANDBY
+	return tokens, nil
+}
+
+func buildConnStr(tokens map[string]string) string {
+	outStr := ""
+
+	for key, value := range tokens {
+		outStr += fmt.Sprintf("%s=%s ", key, value)
+	}
+
+	return outStr
+}
+
+//Build a connection to the pgbouncer instance that uses the credentials of the regular servers.  Goal here
+//is to log into the current master via pgbouncer & make sure that everything is good
+func buildPassthroughPgbouncerConnStr(pgbouncer string, serverConnStr string) (string, error) {
+	pgbouncerTokens, err := decodeConnStrTokens(pgbouncer)
+	if err != nil {
+		return "", err
+	}
+
+	serverTokens, err := decodeConnStrTokens(serverConnStr)
+	if err != nil {
+		return "", err
+	}
+
+	pgbouncerTokens["user"] = serverTokens["user"]
+	pgbouncerTokens["dbname"] = serverTokens["dbname"]
+
+	password, ok := serverTokens["password"]
+	if ok {
+		pgbouncerTokens["password"] = password
 	} else {
-		retchan <- MASTER
-	}
-}
-
-// Check one server, timing out after 3 seconds or whatever is in the config.
-func checkServerWithTimeout(server *Server, donechannel chan int) {
-	timeout := time.After(time.Duration(config.getInt("global", "timeout", 3)) * time.Second)
-	retchan := make(chan Status, 1)
-
-	// Send the actual check
-	go checkServer(*server, retchan)
-
-	select {
-	case status := <-retchan:
-		if server.status != status {
-			log.Printf("%s: now %v", server.name, status)
-			server.status = status
-			server.laststate = time.Now()
-		}
-	case <-timeout:
-		// Something timed out, so we're going to ignore the
-		// result and set this node as down.
-		if server.status != DOWN {
-			log.Printf("%s: timeout", server.name)
-			server.status = DOWN
-			server.laststate = time.Now()
-		}
-	}
-	server.lastcheck = time.Now()
-	donechannel <- 1
-}
-
-// Return a validated connection to pgbouncer. If no connection
-// can be made, logs the error and returns nil.
-func getValidBouncerConnection() *sql.DB {
-	bouncer, err := sql.Open("postgres", config["global"]["pgbouncer"])
-	if err != nil {
-		log.Printf("ERROR: could not connect to pgbouncer: %s", err)
-		return nil
-	}
-	bouncer.SetMaxIdleConns(0)
-
-	err = bouncer.Ping()
-	if err != nil {
-		log.Printf("ERROR: could not connect to pgbouncer: %s", err)
-		return nil
+		delete(pgbouncerTokens, "password")
 	}
 
-	return bouncer
-}
-
-// Actually reconfigure pgbouncer
-func flipActiveMaster(server *Server) {
-	// First connect to pgbouncer to make sure we can
-	bouncer := getValidBouncerConnection()
-	if bouncer == nil {
-		// Error already logged
-		return
-	}
-	defer bouncer.Close()
-
-	// Then flip the actual symlink
-	err := os.Remove(config["global"]["symlink"])
-	if err != nil {
-		log.Printf("ERROR: failed to remove old symlink: %s", err)
-		return
-	}
-
-	err = os.Symlink(fmt.Sprintf("%s/%s.ini", strings.TrimRight(config["global"]["configdir"], "/"), server.name), config["global"]["symlink"])
-	if err != nil {
-		log.Printf("ERROR: failed to set symlink for server %s: %s", server.name, err)
-		return
-	}
-
-	_, err = bouncer.Exec("RELOAD")
-	if err != nil {
-		log.Printf("ERROR: failed to reload pgbouncer: %s", err)
-		return
-	}
-
-	log.Printf("pgbouncer reconfigured for new master %s", server.name)
+	return buildConnStr(pgbouncerTokens), nil
 }
 
 func mainloop(statuschan chan []Server) {
 	servers := []Server{}
+	pgbouncer := &Server{name: "bouncer", connstr: config["global"]["pgbouncer"]}
 	for name, connstr := range config["servers"] {
 		// Make sure the file exists
 		path := fmt.Sprintf("%s/%s.ini", config["global"]["configdir"], name)
@@ -165,15 +125,20 @@ func mainloop(statuschan chan []Server) {
 		servers = append(servers, Server{name: name, connstr: connstr})
 	}
 	for {
-		bouncer := getValidBouncerConnection()
-		if bouncer == nil {
-			// Error already logged
-			time.Sleep(5 * time.Second)
-		} else {
-			bouncer.Close()
+		bouncer, err := pgbouncer.OpenConnection()
+		AttemptClose(bouncer)
+		if err == nil {
 			break
 		}
+		log.Printf("ERROR: could not connect to pgbouncer: %s\n", err)
+		time.Sleep(5 * time.Second)
 	}
+
+	keyHealthConnStr, err := buildPassthroughPgbouncerConnStr(pgbouncer.connstr, servers[0].connstr)
+	if err != nil {
+		log.Fatalln(err)
+	}
+	pgbouncerHealth := &Server{name: "bouncerhealth", connstr: keyHealthConnStr}
 
 	log.Printf("Connection to pgbouncer validated, starting polling")
 
@@ -182,28 +147,52 @@ func mainloop(statuschan chan []Server) {
 
 	// Start a timer that will make our loop tick, and then loop
 	// forever on it.
-	ticker := time.Tick(time.Duration(config.getInt("global", "interval", 30)) * time.Second)
+	ticker := make(chan time.Time)
+	go func(ticker chan time.Time) {
+		longTimer := time.Tick(time.Duration(config.getInt("global", "interval", 30)) * time.Second)
+		shortTimer := time.Tick(100 * time.Millisecond)
+		for {
+			select {
+			case out := <-shortTimer:
+				if aggressiveChecks {
+					ticker <- out
+				}
+				continue
+			case out := <-longTimer:
+				ticker <- out
+				continue
+			}
+		}
+	}(ticker)
 
-	var currentmaster *Server = nil
+	var currentmaster *Server
 
 	for {
 		// Make one poll-run across all servers in parallell, each on
 		// their own goroutine. Collect and wait until all are done.
-		donechannel := make(chan int, len(servers))
+		var doneWg sync.WaitGroup
 		for i := 0; i < len(servers); i++ {
 			s := &servers[i]
-			go checkServerWithTimeout(s, donechannel)
+			doneWg.Add(1)
+			go func(server *Server) {
+				defer doneWg.Done()
+				server.CheckWithTimeout()
+			}(s)
 		}
-		for _ = range servers {
-			<-donechannel
-		}
+		doneWg.Add(1)
+		go func(server *Server) {
+			defer doneWg.Done()
+			server.CheckWithTimeout()
+		}(pgbouncerHealth)
+
+		doneWg.Wait()
 
 		// Send off the newly collected status so it can be monitored
 		// immediately.
 		statuschan <- servers
 
 		// Who's our new master?
-		var newmaster *Server = nil
+		var newmaster *Server
 		disable := false
 		for i := 0; i < len(servers); i++ {
 			s := &servers[i]
@@ -215,6 +204,13 @@ func mainloop(statuschan chan []Server) {
 					newmaster = s
 				}
 			}
+		}
+
+		// We set rebouncer onto "aggressive mode" when we flip over the master so that we if there
+		// are problems with the RELOAD we can hopefully spam it until it works
+		// If pgbouncer is looking good we need to turn that off
+		if aggressiveChecks && pgbouncerHealth.status == MASTER {
+			aggressiveChecks = false
 		}
 
 		// Did the master change?
@@ -229,9 +225,13 @@ func mainloop(statuschan chan []Server) {
 					log.Printf("Master detected as %s", newmaster.name)
 				}
 
-				flipActiveMaster(newmaster)
+				newmaster.MakeActiveMaster(pgbouncer)
 
 				currentmaster = newmaster
+			} else if pgbouncerHealth.status != MASTER {
+				//We've recently flipped over the pgbouncer but it's still not pointing at a master &
+				//we have a functioning master so that's weird.  Try reloading it again
+				currentmaster.MakeActiveMaster(pgbouncer)
 			}
 		}
 
@@ -283,5 +283,8 @@ func main() {
 
 	// Start our status http server. This will also block
 	// forever.
-	runHttpServer()
+	err := runHTTPServer()
+	if err != nil {
+		log.Fatalln(err)
+	}
 }
